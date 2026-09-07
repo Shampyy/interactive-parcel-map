@@ -23,10 +23,33 @@
 
             // Získání jmenných prostorů pro správné parsování elementů
             $namespaces = $node->getNamespaces(true);
+            $nsCom = $namespaces['com'] ?? 'urn:cz:isvs:ruian:schemas:CommonTypy:v1';
             $pai = $node->children($namespaces['pai']);
 
             $kmenoveCislo = (string) $pai->KmenoveCislo;
+            $poddeleniCisla = (string) $pai->PoddeleniCisla;
             $vymera = (int) $pai->VymeraParcely;
+
+            if(isset($pai->KatastralniUzemi)){
+                $com = $pai->KatastralniUzemi->children($nsCom);
+                $KatastralniUzemiKod = (string) $com->Kod;
+            }else{
+                $KatastralniUzemiKod = '';
+            }
+
+            if(isset($pai->DruhPozemku)){
+                $comDruh = $pai->DruhPozemku->children($nsCom);
+                $DruhPozemkuKod = (string) $comDruh->Kod;
+            }else{
+                $DruhPozemkuKod = '';
+            }
+
+            if (!empty($poddeleniCisla)) {
+                $formatovaneCislo = $kmenoveCislo . '/' . $poddeleniCisla;
+            }else{
+                $formatovaneCislo = $kmenoveCislo;
+            }
+
 
             // Kontrola, zda má parcela definované hranice
             if (isset($pai->Geometrie->OriginalniHranice)) {
@@ -52,8 +75,10 @@
                     $geoJsonFeatures[] = [
                         "type" => "Feature",
                         "properties" => [
-                            "parcel_number" => $kmenoveCislo,
-                            "area" => $vymera
+                            "parcel_number" => $formatovaneCislo,
+                            "area" => $vymera,
+                            "type" => $DruhPozemkuKod,
+                            "region" => $KatastralniUzemiKod,
                         ],
                         "geometry" => [
                             "type" => "Polygon",
