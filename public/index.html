@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8">
+  <title>Mapa parcel</title>
+
+  <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+  <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css">
+</head>
+
+<body>
+  <div id="map"></div>
+
+  <div id="slide-panel">
+    <button id="close-panel">X</button>
+    <h2 id="parcel-title">Parcela</h2>
+    <p id="parcel-area"></p>
+    <p id="parcel-type"></p>
+    <p id="parcel-region"></p>
+  </div>
+
+  <script>
+
+    const slovnikDruhu = {
+      "2": "Orná půda",
+      "5": "Zahrada",
+      "7": "Trvalý travní porost",
+      "10": "Lesní pozemek",
+      "11": "Vodní plocha",
+      "13": "Zastavěná plocha a nádvoří",
+      "14": "Ostatní plocha"
+    };
+
+    const slovnikKatastru = {
+      "659673": "Jičín",
+      "740217": "Moravčice"
+      // (případně další kódy z tvého XML)
+    };
+
+    const slovnikObci = {
+      "572659": "Jičín"
+    };
+
+    const map = new maplibregl.Map({
+      container: 'map',
+      style: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
+      center: [15.3533, 50.4377],
+      zoom: 14
+    })
+
+    map.on('load', () => {
+      map.addSource('jicin_parcels', {type: 'geojson', data: 'geojson/jicin_parcels.json'})
+
+      map.addLayer({
+        id: 'parcels-fill',
+        type: 'fill',
+        source: 'jicin_parcels',
+        paint: {
+          'fill-color': '#096984',
+          'fill-opacity': 0.2
+        }
+      })
+
+      map.addLayer({
+        id: 'parcels-outline',
+        type: 'line',
+        source: 'jicin_parcels',
+        paint: {
+          'line-color': '#000000',
+          'line-width': 1,
+        },
+      })
+
+      map.addLayer({
+        id: 'parcels-selected',
+        type: 'fill',
+        source: 'jicin_parcels',
+        paint: {
+          'fill-color': '#024a7e',
+          'fill-opacity': 0.2
+        },
+        filter: ['==', 'parcel_number', '']
+      })
+    })
+
+    map.on('mouseenter', 'parcels-fill', (e) => {
+
+      map.getCanvas().style.cursor = 'pointer';
+    })
+
+    map.on('click', 'parcels-fill', (e) => {
+      const props = e.features[0].properties;
+      console.log("Kliknutá parcela:", props);
+
+      // Zvýraznění kliknuté parcely změnou filtru
+      map.setFilter('parcels-selected', ['==', 'parcel_number', props.parcel_number]);
+
+      // Otevření panelu přidáním třídy
+      document.getElementById('slide-panel').classList.add('panel-open');
+
+      // Překlad kódů přes slovníky (pokud kód ve slovníku není, vypíše se fallback)
+      const nazevDruhu = slovnikDruhu[props.type] || `Neznámý druh (${props.type})`;
+      const nazevKatastru = slovnikKatastru[props.region] || `KÚ (${props.region})`;
+      const nazevObce = slovnikObci[props.municipality] || `Obec (${props.municipality})`;
+
+      // Naplnění HTML elementů
+      document.getElementById('parcel-title').innerText = `Parcela: ${props.parcel_number}`;
+      document.getElementById('parcel-area').innerHTML = `<strong>Výměra:</strong> ${props.area} m²`;
+      document.getElementById('parcel-type').innerHTML = `<strong>Druh pozemku:</strong> ${nazevDruhu}`;
+      document.getElementById('parcel-region').innerHTML = `<strong>Katastr:</strong> ${nazevKatastru}, <strong>Obec:</strong> ${nazevObce}`;
+    })
+
+    map.on('mouseleave', 'parcels-fill', (e) => {
+      map.getCanvas().style.cursor = '';
+    })
+
+    document.getElementById('close-panel').addEventListener('click', () => {
+      document.getElementById('slide-panel').classList.remove('panel-open');
+      map.setFilter('parcels-selected', ['==', 'parcel_number', '']);
+    });
+
+  </script>
+
+</body>
+</html>

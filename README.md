@@ -2,7 +2,7 @@
 
 Tento dokument slouží jako rychlý přehled architektury, datových toků a klíčových technických rozhodnutí pro rychlou orientaci během vývoje a obhajoby projektu.
 
-Strávený čas: 180 minut.
+Strávený čas: 420 minut.
 
 ## 🛠 Tech Stack & Zdůvodnění
 

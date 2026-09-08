@@ -1,0 +1,42 @@
+/* Zobrazení mapy */
+body { margin: 0; padding: 0; }
+#map { position: absolute; top: 0; bottom: 0; width: 100%; }
+
+/* Základní styl pro vyjížděcí panel */
+#slide-panel {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 320px;
+    height: 100%;
+    background-color: #ffffff;
+    box-shadow: -4px 0 15px rgba(0, 0, 0, 0.1);
+    z-index: 10;
+    padding: 25px;
+    box-sizing: border-box;
+    font-family: sans-serif;
+
+    /* Zajištění posunu mimo obrazovku a plynulé animace */
+    transform: translateX(100%);
+    transition: transform 0.3s ease-in-out;
+}
+
+/* Třída, kterou přidáme přes JS pro zobrazení panelu */
+#slide-panel.panel-open {
+    transform: translateX(0);
+}
+
+/* Vzhled zavíracího tlačítka */
+#close-panel {
+    background-color: #f44336;
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    cursor: pointer;
+    float: right;
+    border-radius: 4px;
+}
+
+#close-panel:hover {
+    background-color: #d32f2f;
+}
