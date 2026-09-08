@@ -54,9 +54,27 @@
             // Kontrola, zda má parcela definované hranice
             if (isset($pai->Geometrie->OriginalniHranice)) {
                 $gml = $pai->Geometrie->OriginalniHranice->children($namespaces['gml']);
-                $posListText = (string) $gml->Polygon->exterior->LinearRing->posList;
+                $exterior = $gml->Polygon->exterior;
 
-                // Odstranění vícenásobných bílých znaků a rozdělení na jednotlivé souřadnice
+                $posListText = '';
+
+                if (isset($exterior->LinearRing)) {
+                    // Jednoduchý polygon (rovné hrany)
+                    $posListText = (string) $exterior->LinearRing->posList;
+                } elseif (isset($exterior->Ring)) {
+                    // Složený polygon (křivky a zaoblení)
+                    $segments = [];
+                    foreach ($exterior->Ring->curveMember as $curveMember) {
+                        if (isset($curveMember->LineString)) {
+                            $segments[] = (string) $curveMember->LineString->posList;
+                        } elseif (isset($curveMember->Curve->segments->ArcString)) {
+                            $segments[] = (string) $curveMember->Curve->segments->ArcString->posList;
+                        }
+                    }
+                    $posListText = implode(' ', $segments);
+                }
+
+                // Rozdělení textového seznamu souřadnic do pole
                 $coordArray = preg_split('/\s+/', trim($posListText), -1, PREG_SPLIT_NO_EMPTY);
                 $polygonCoords = [];
 
@@ -64,10 +82,7 @@
                 for ($i = 0; $i < count($coordArray) - 1; $i += 2) {
                     $y = (float) $coordArray[$i];
                     $x = (float) $coordArray[$i + 1];
-
-                    // Převod ze systému S-JTSK do WGS84
-                    $converterPoint = $converter->convertToGeoJson($y, $x);
-                    $polygonCoords[] = $converterPoint;
+                    $polygonCoords[] = $converter->convertToGeoJson($y, $x);
                 }
 
                 // Uložení feature objektu pouze v případě, že se podařilo vyčíst platné souřadnice
@@ -87,9 +102,15 @@
                     ];
                 }
             }
-            $reader->next();
         }
     }
+
+    $reader->close();
+
+    // Seřazení podle výměry (od největší po nejmenší).
+    usort($geoJsonFeatures, function ($a, $b) {
+        return $b['properties']['area'] <=> $a['properties']['area'];
+    });
 
     // Sestavení finálního GeoJSON objektu
     $finalGeoJson = [
