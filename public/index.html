@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <title>Mapa parcel - Jičín</title>
 
+  <!-- Načtení knihovny MapLibre GL JS pro vykreslování mapy -->
   <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
   <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
   <link rel="stylesheet" href="css/style.css">
@@ -24,10 +25,11 @@
   </div>
 
   <script>
-    // Lokální číselník pro druhy pozemků (v RUIAN se téměř nemění, není nutné dynamicky tahat z XML)
+    // Lokální číselník pro druhy pozemků
     const slovnikDruhu = {
       "2": "Orná půda",
       "5": "Zahrada",
+      "6": "Ovocný sad",
       "7": "Trvalý travní porost",
       "10": "Lesní pozemek",
       "11": "Vodní plocha",
@@ -39,48 +41,152 @@
     const map = new maplibregl.Map({
       container: 'map',
       style: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
-      center: [15.3533, 50.4377], // Souřadnice: Jičín
-      zoom: 14
+      center: [15.3533, 50.4377],
+      zoom: 13
     });
 
-    // Načtení vrstev a GeoJSON dat až po plném vykreslení mapy
+    /**
+     * Hlavní logika pro dynamické načítání parcel z PHP API podle aktuálního výřezu mapy (bbox).
+     */
+
+    let fetchTimeout;
+    let lastFetchTime = 0;
+
+    // Klientská cache už jednou stažených parcel (id -> feature).
+    let cache = new Map();
+
+    // Řídicí funkce volaná při každém pohybu mapy.
+    function nactiVyrez() {
+      if (map.getZoom() < 13) return; // pod tímto zoomem se parcely vůbec nestahují ani nevykreslují
+
+      const now = Date.now();
+
+      // THROTTLE: pokud od posledního stažení uplynulo dost času, stáhneme hned
+      if (now - lastFetchTime > 300) {
+        provedFetch();
+      }
+
+      // DEBOUNCE: vždy naplánujeme ještě jedno stažení po zastavení pohybu,
+      // aby se zobrazila přesně ta oblast, kde uživatel skončil
+      clearTimeout(fetchTimeout);
+      fetchTimeout = setTimeout(() => {
+        provedFetch();
+      }, 200);
+    }
+
+    // Samotné stažení dat z API pro aktuální výřez mapy
+    function provedFetch() {
+      lastFetchTime = Date.now();
+
+      const b = map.getBounds();
+      const lonDiff = b.getEast() - b.getWest();
+      const latDiff = b.getNorth() - b.getSouth();
+
+      // Buffer: stahujeme větší oblast, než je právě vidět
+      const west = b.getWest() - lonDiff;
+      const south = b.getSouth() - latDiff;
+      const east = b.getEast() + lonDiff;
+      const north = b.getNorth() + latDiff;
+
+      const bbox = `${west},${south},${east},${north}`;
+
+      fetch(`api/parcely.php?bbox=${bbox}`)
+              .then(response => response.json())
+              .then(data => {
+                // Nová data přidáme do cache
+                data.features.forEach(f => cache.set(f.properties.id, f));
+
+                // Z cache odstraníme vše, co je už výrazně mimo aktuální oblast zájmu
+                vycistiCache({ west, south, east, north });
+
+                // MapLibre zdroj aktualizujeme celou aktuální cach najednou
+                map.getSource('jicin_parcels').setData({
+                  type: 'FeatureCollection',
+                  features: Array.from(cache.values())
+                });
+              })
+              .catch(err => console.error("Chyba při stahování parcel:", err));
+    }
+
+    // Spočítá bounding box (min/max lon/lat) jedné feature
+    function featureBBox(f) {
+      const coords = f.geometry.coordinates[0];
+      let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
+      for (const [lon, lat] of coords) {
+        if (lon < minLon) minLon = lon;
+        if (lon > maxLon) maxLon = lon;
+        if (lat < minLat) minLat = lat;
+        if (lat > maxLat) maxLat = lat;
+      }
+      return { minLon, maxLon, minLat, maxLat };
+    }
+
+    // Odstraní z cache parcely, jejichž CELÝ bounding box leží mimo aktuální
+    // buffer (+ 20% rezerva navíc)
+    function vycistiCache(bufferBounds) {
+      const marginLon = (bufferBounds.east - bufferBounds.west) * 0.2;
+      const marginLat = (bufferBounds.north - bufferBounds.south) * 0.2;
+
+      for (const [id, f] of cache) {
+        const bbox = featureBBox(f);
+        const mimo = bbox.maxLon < bufferBounds.west - marginLon ||
+                bbox.minLon > bufferBounds.east + marginLon ||
+                bbox.maxLat < bufferBounds.south - marginLat ||
+                bbox.minLat > bufferBounds.north + marginLat;
+        if (mimo) cache.delete(id);
+      }
+    }
+
+    map.on('move', nactiVyrez);
+
+    // Co se má stát, když se mapa poprvé načte
     map.on('load', () => {
-      // Definice zdroje dat
-      map.addSource('jicin_parcels', { type: 'geojson', data: 'geojson/jicin_parcels.json' });
+      map.addSource('jicin_parcels', {
+        type: 'geojson',
+        buffer: 256,
+        maxzoom: 24,
+        data: {
+          type: 'FeatureCollection', features: []
+        }
+      });
 
       // Vrstva 1: Základní výplň polygonů
       map.addLayer({
         id: 'parcels-fill',
         type: 'fill',
         source: 'jicin_parcels',
+        minzoom: 13,
         paint: {
-          'fill-color': '#c8dbe0',
+          'fill-color': '#dde5e8',
           'fill-opacity': 1
         }
       });
 
-      // Vrstva 2: Černé okraje parcel
+      // Vrstva 2: Obrysy parcel
       map.addLayer({
         id: 'parcels-outline',
         type: 'line',
         source: 'jicin_parcels',
+        minzoom: 13,
         paint: {
-          'line-color': '#000000',
+          'line-color': '#424141',
           'line-width': 1,
+          'line-opacity': 0.5
         }
       });
 
-      // Vrstva 3: zvýraznění vybrané parcely
+      // Vrstva 3: Zvýraznění vybrané parcely
       map.addLayer({
         id: 'parcels-selected',
         type: 'fill',
         source: 'jicin_parcels',
         paint: {
-          'fill-color': '#024a7e',
-          'fill-opacity': 0.2,
+          'fill-color': '#05395e',
+          'fill-opacity': 0.4,
         },
-        filter: ['==', 'id', '']
+        filter: ['==', ['get', 'id'], '']
       });
+      nactiVyrez();
     });
 
     map.on('mouseenter', 'parcels-fill', () => {
@@ -90,35 +196,39 @@
       map.getCanvas().style.cursor = '';
     });
 
+    // Kliknutí na konkrétní parcelu
     map.on('click', 'parcels-fill', (e) => {
       if (!e.features || e.features.length === 0) return;
 
-      // Pokud na sebe parcely navrstvují, ta s menší plochou bude navrchu
+      // Pokud se v daném bodě překrývá víc parcel, vybereme tu s nejmenší výměrou
       const feature = e.features.reduce((smallest, f) =>
               f.properties.area < smallest.properties.area ? f : smallest
       );
       const props = feature.properties;
 
-      map.setFilter('parcels-selected', ['==', 'id', props.id]);
+      // Zvýraznění podle unikátního id
+      map.setFilter('parcels-selected', ['==', ['get', 'id'], props.id]);
+
+      // Otevření bočního panelu přidáním CSS třídy
       document.getElementById('slide-panel').classList.add('panel-open');
 
-      // Mapování dat - Druh pozemku přes JS číselník, Katastr a Obec se tahají z GeoJSON vlastností
+      // Překlad kódů na čitelné texty
       const nazevDruhu = slovnikDruhu[props.type] || `Neznámý druh (${props.type})`;
-      const nazevKatastru = props.region_name || `KÚ (${props.region})`;
-      const nazevObce = props.municipality_name || `Obec (${props.municipality})`;
+      const nazevKatastru = props.region_name || props.region || `Neznámé KÚ`;
+      const nazevObce = props.municipality_name || props.municipality || `Neznámá obec`;
 
-      // Vložení dat do HTML
+      // Naplnění bočního panelu
       document.getElementById('parcel-title').innerText = `Parcela: ${props.parcel_number}`;
       document.getElementById('parcel-area').innerHTML = `<strong>Výměra:</strong> ${props.area} m²`;
       document.getElementById('parcel-type').innerHTML = `<strong>Druh pozemku:</strong> ${nazevDruhu}`;
-      document.getElementById('parcel-region').innerHTML = `<strong>Katastrální území:</strong> ${nazevKatastru} `;
+      document.getElementById('parcel-region').innerHTML = `<strong>Katastrální území:</strong> ${nazevKatastru}`;
       document.getElementById('parcel-municipality').innerHTML = `<strong>Obec:</strong> ${nazevObce}`;
     });
 
-    // křížek pro zavření panelu a zrušení výběru na mapě
+    // Zavření panelu a zrušení zvýraznění na mapě
     document.getElementById('close-panel').addEventListener('click', () => {
       document.getElementById('slide-panel').classList.remove('panel-open');
-      map.setFilter('parcels-selected', ['==', 'id', '']);
+      map.setFilter('parcels-selected', ['==', ['get', 'id'], '']);
     });
 
   </script>
