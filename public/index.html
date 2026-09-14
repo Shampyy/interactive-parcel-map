@@ -57,7 +57,7 @@
 
     // Řídicí funkce volaná při každém pohybu mapy.
     function nactiVyrez() {
-      if (map.getZoom() < 13) return; // pod tímto zoomem se parcely vůbec nestahují ani nevykreslují
+      if (map.getZoom() < 10) return; // pod tímto zoomem se parcely vůbec nestahují ani nevykreslují
 
       const now = Date.now();
 
@@ -122,8 +122,6 @@
       return { minLon, maxLon, minLat, maxLat };
     }
 
-    // Odstraní z cache parcely, jejichž CELÝ bounding box leží mimo aktuální
-    // buffer (+ 20% rezerva navíc)
     function vycistiCache(bufferBounds) {
       const marginLon = (bufferBounds.east - bufferBounds.west) * 0.2;
       const marginLat = (bufferBounds.north - bufferBounds.south) * 0.2;
@@ -156,7 +154,7 @@
         id: 'parcels-fill',
         type: 'fill',
         source: 'jicin_parcels',
-        minzoom: 13,
+        //minzoom: 13,
         paint: {
           'fill-color': '#dde5e8',
           'fill-opacity': 1
@@ -168,12 +166,21 @@
         id: 'parcels-outline',
         type: 'line',
         source: 'jicin_parcels',
-        minzoom: 13,
+        //minzoom: 13,
         paint: {
-          'line-color': '#424141',
-          'line-width': 1,
-          'line-opacity': 0.5
-        }
+        'line-color': '#000000',
+        'line-width': [
+          'interpolate', ['linear'], ['zoom'],
+          11, 0.1,
+          14, 0.5,
+          16, 2.0
+        ],
+        'line-opacity': [
+          'interpolate', ['linear'], ['zoom'],
+          11, 0.15,
+          14, 1.0
+        ]
+      }
       });
 
       // Vrstva 3: Zvýraznění vybrané parcely
