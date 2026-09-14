@@ -23,8 +23,8 @@
     // Dotaz přes JOIN na R-Tree tabulku
     $stmt = $db->prepare('
     SELECT p.id, p.parcel_number, p.area, p.type, p.region, p.region_name, p.municipality, p.municipality_name, p.geometry
-    FROM parcely p
-    JOIN parcely_rtree r ON p.id = r.id
+    FROM parcely_rtree r
+    JOIN parcely p ON p.id = r.id
     WHERE r.minX <= ? AND r.maxX >= ? AND r.minY <= ? AND r.maxY >= ?
     ');
 
@@ -51,7 +51,7 @@
             ],
             "geometry" => [
                 "type" => "Polygon",
-                "coordinates" => [$souradnice]
+                "coordinates" => $souradnice
             ]
         ];
 

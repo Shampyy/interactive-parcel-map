@@ -83,10 +83,11 @@
       const latDiff = b.getNorth() - b.getSouth();
 
       // Buffer: stahujeme větší oblast, než je právě vidět
-      const west = b.getWest() - lonDiff;
-      const south = b.getSouth() - latDiff;
-      const east = b.getEast() + lonDiff;
-      const north = b.getNorth() + latDiff;
+      const bufferFactor = 0.2;
+      const west = b.getWest() - (lonDiff * bufferFactor);
+      const south = b.getSouth() - (latDiff * bufferFactor);
+      const east = b.getEast() + (lonDiff * bufferFactor);
+      const north = b.getNorth() + (latDiff * bufferFactor);
 
       const bbox = `${west},${south},${east},${north}`;
 

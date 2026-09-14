@@ -32,7 +32,7 @@
 
     // Hlavní tabulka s atributy parcely a geometrií uloženou jako JSON text
     $db->exec('CREATE TABLE IF NOT EXISTS parcely (
-    id TEXT PRIMARY KEY, parcel_number TEXT, area INTEGER,
+    id INTEGER PRIMARY KEY, parcel_number TEXT, area INTEGER,
     type TEXT, region TEXT, region_name TEXT, municipality TEXT, municipality_name TEXT, geometry TEXT
     )');
 
@@ -50,6 +50,31 @@
     $katastrToObec = [];
     $currentObecKod = '';
     $currentObecNazev = '';
+
+    // Pomocná funkce pro vytažení a konverzi bodů z jakékoliv hranice
+    $parseBoundary = function($boundaryNode) use ($converter) {
+        $posListText = '';
+        if (isset($boundaryNode->LinearRing)) {
+            $posListText = (string) $boundaryNode->LinearRing->posList;
+        } elseif (isset($boundaryNode->Ring)) {
+            $segments = [];
+            foreach ($boundaryNode->Ring->curveMember as $curveMember) {
+                if (isset($curveMember->LineString)) {
+                    $segments[] = (string) $curveMember->LineString->posList;
+                } elseif (isset($curveMember->Curve->segments->ArcString)) {
+                    $segments[] = (string) $curveMember->Curve->segments->ArcString->posList;
+                }
+            }
+            $posListText = implode(' ', $segments);
+        }
+
+        $coordArray = preg_split('/\s+/', trim($posListText), -1, PREG_SPLIT_NO_EMPTY);
+        $coords = [];
+        for ($i = 0; $i < count($coordArray) - 1; $i += 2) {
+            $coords[] = $converter->convertToGeoJson((float)$coordArray[$i], (float)$coordArray[$i + 1]);
+        }
+        return $coords;
+    };
 
     $db->beginTransaction();
 
@@ -91,7 +116,7 @@
             $namespaces = $node->getNamespaces(true);
             $pai = $node->children($namespaces['pai']);
 
-            $paiId = (string) $pai->Id;
+            $paiId =  (int) $pai->Id;
 
             // Základní atributy parcely
             $kmenoveCislo = (string) $pai->KmenoveCislo;
@@ -118,48 +143,36 @@
                 $formatovaneCislo = $kmenoveCislo;
             }
 
-            // Kontrola, zda má parcela definované hranice, a extrakce souřadnicových bodů
+            // Kontrola, zda má parcela definované hranice
             if (isset($pai->Geometrie->OriginalniHranice)) {
                 $gml = $pai->Geometrie->OriginalniHranice->children($namespaces['gml']);
-                $exterior = $gml->Polygon->exterior;
 
-                $posListText = '';
-
-                if (isset($exterior->LinearRing)) {
-
-                    $posListText = (string) $exterior->LinearRing->posList;
-
-                } elseif (isset($exterior->Ring)) {
-                    $segments = [];
-                    foreach ($exterior->Ring->curveMember as $curveMember) {
-                        if (isset($curveMember->LineString)) {
-                            $segments[] = (string) $curveMember->LineString->posList;
-                        } elseif (isset($curveMember->Curve->segments->ArcString)) {
-                            $segments[] = (string) $curveMember->Curve->segments->ArcString->posList;
-                        }
-                    }
-                    $posListText = implode(' ', $segments);
-                }
-
-                // Rozdělení textového seznamu souřadnic do pole čísel
-                $coordArray = preg_split('/\s+/', trim($posListText), -1, PREG_SPLIT_NO_EMPTY);
+                // Zde budou všechny obrysy
                 $polygonCoords = [];
 
-                // Převod dvojic Y, X ze systému S-JTSK do WGS84 (lon/lat)
-                for ($i = 0; $i < count($coordArray) - 1; $i += 2) {
-                    $y = (float) $coordArray[$i];
-                    $x = (float) $coordArray[$i + 1];
-                    $polygonCoords[] = $converter->convertToGeoJson($y, $x);
+                // Zpracování vnější hranice
+                $exteriorCoords = $parseBoundary($gml->Polygon->exterior);
+                if (!empty($exteriorCoords)) {
+                    $polygonCoords[] = $exteriorCoords;
                 }
 
-                // Pokud máme platné body, uložíme parcelu do databáze
-                if (count($polygonCoords) > 0) {
+                // Zpracování vnitřní hranice
+                if (isset($gml->Polygon->interior)) {
+                    foreach ($gml->Polygon->interior as $interiorNode) {
+                        $interiorCoords = $parseBoundary($interiorNode);
+                        if (!empty($interiorCoords)) {
+                            $polygonCoords[] = $interiorCoords;
+                        }
+                    }
+                }
 
+                // Pokud máme platný vnější obrys, uložíme do DB
+                if (count($polygonCoords) > 0 && count($polygonCoords[0]) > 0) {
                     $ObecKod = $katastrToObec[$KatastralniUzemiKod] ?? '';
 
-                    // Bounding box parcely — potřebný pro R-Tree prostorový index
-                    $lon = array_column($polygonCoords, 0);
-                    $lat = array_column($polygonCoords, 1);
+                    // Bounding box parcely počítáme pouze z vnějšího obvodu (index 0)!
+                    $lon = array_column($polygonCoords[0], 0);
+                    $lat = array_column($polygonCoords[0], 1);
 
                     $insert->execute([
                         $paiId,
