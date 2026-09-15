@@ -9,7 +9,7 @@ if [ ! -f "data/raw/data_jicin.xml" ]; then
     curl -o data/raw/jicin.zip https://vdp.cuzk.gov.cz/vymenny_format/soucasna/20260831_OB_572659_UKSH.xml.zip
 
     echo "Rozbaluji a přejmenovávám na jicin_parcels.xml..."
-    unzip -p data/raw/jicin.zip > data/raw/jicin_parcels.xml
+    unzip -p data/raw/jicin.zip > data/raw/data_jicin.xml
 
     # Úklid staženého ZIPu
     rm data/raw/jicin.zip
