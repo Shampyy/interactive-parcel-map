@@ -1,13 +1,15 @@
-# Oficiální  PHP v CLI verzi
+# Oficiální PHP v CLI verzi
 FROM php:8.2-cli
 
-# Instalace systémových závislostí a rozšíření pro SQLite a ZIP
+# Instalace systémových závislostí (přidán curl) a rozšíření pro SQLite a ZIP
 RUN apt-get update && apt-get install -y \
+    curl \
     unzip \
     libzip-dev \
     sqlite3 \
     libsqlite3-dev \
-    && docker-php-ext-install zip pdo pdo_sqlite
+    && docker-php-ext-install zip pdo pdo_sqlite \
+    && rm -rf /var/lib/apt/lists/* # Pročištění cache apt (dobrá praxe pro zmenšení image)
 
 # Instalace Composeru
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
@@ -24,5 +26,8 @@ RUN composer install --no-interaction --optimize-autoloader
 # Zpřístupnění portu pro webový server
 EXPOSE 8000
 
-# Startovací příkaz: Nejdřív provede import dat, pak spustí lokální PHP server
-CMD php scripts/import.php && php -S 0.0.0.0:8000 -t public
+# Nastavení spustitelnosti nového bash skriptu pro jistotu (zabrání chybám s oprávněním na Windows)
+RUN chmod +x scripts/start.sh
+
+# Startovací příkaz: Volá náš nový komplexní bash skript (stažení -> import -> server)
+CMD ["sh", "./scripts/start.sh"]
