@@ -49,34 +49,25 @@
      * Hlavní logika pro dynamické načítání parcel z PHP API podle aktuálního výřezu mapy (bbox).
      */
 
-    let fetchTimeout;
-    let lastFetchTime = 0;
-
     // Klientská cache už jednou stažených parcel (id -> feature).
     let cache = new Map();
 
-    // Řídicí funkce volaná při každém pohybu mapy.
+    let fetchInProgress = false;
+    let refetchNeeded = false;
+
+    // Řídicí funkce — volaná jen při ustálení pohybu mapy (moveend).
     function nactiVyrez() {
-      if (map.getZoom() < 10) return; // pod tímto zoomem se parcely vůbec nestahují ani nevykreslují
-
-      const now = Date.now();
-
-      // THROTTLE: pokud od posledního stažení uplynulo dost času, stáhneme hned
-      if (now - lastFetchTime > 300) {
-        provedFetch();
+      if (fetchInProgress) {
+        refetchNeeded = true;
+        return;
       }
-
-      // DEBOUNCE: vždy naplánujeme ještě jedno stažení po zastavení pohybu,
-      // aby se zobrazila přesně ta oblast, kde uživatel skončil
-      clearTimeout(fetchTimeout);
-      fetchTimeout = setTimeout(() => {
-        provedFetch();
-      }, 200);
+      provedFetch();
     }
 
     // Samotné stažení dat z API pro aktuální výřez mapy
     function provedFetch() {
-      lastFetchTime = Date.now();
+      fetchInProgress = true;
+      refetchNeeded = false;
 
       const b = map.getBounds();
       const lonDiff = b.getEast() - b.getWest();
@@ -90,9 +81,15 @@
       const north = b.getNorth() + (latDiff * bufferFactor);
 
       const bbox = `${west},${south},${east},${north}`;
+      const currentZoom = Math.round(map.getZoom());
 
-      fetch(`api/parcely.php?bbox=${bbox}`)
-              .then(response => response.json())
+      fetch(`api/parcely.php?bbox=${bbox}&zoom=${currentZoom}`)
+              .then(response => {
+                if (!response.ok) {
+                  throw new Error(`API vrátilo ${response.status}`);
+                }
+                return response.json();
+              })
               .then(data => {
                 // Nová data přidáme do cache
                 data.features.forEach(f => cache.set(f.properties.id, f));
@@ -100,13 +97,21 @@
                 // Z cache odstraníme vše, co je už výrazně mimo aktuální oblast zájmu
                 vycistiCache({ west, south, east, north });
 
-                // MapLibre zdroj aktualizujeme celou aktuální cach najednou
+                // Finální překreslení mapy
                 map.getSource('jicin_parcels').setData({
                   type: 'FeatureCollection',
                   features: Array.from(cache.values())
                 });
               })
-              .catch(err => console.error("Chyba při stahování parcel:", err));
+              .catch(err => {
+                console.error("Chyba při stahování parcel:", err);
+              })
+              .finally(() => {
+                fetchInProgress = false;
+                if (refetchNeeded) {
+                  provedFetch();
+                }
+              });
     }
 
     // Spočítá bounding box (min/max lon/lat) jedné feature
@@ -136,7 +141,7 @@
       }
     }
 
-    map.on('move', nactiVyrez);
+    map.on('moveend', nactiVyrez);
 
     // Co se má stát, když se mapa poprvé načte
     map.on('load', () => {
@@ -154,7 +159,6 @@
         id: 'parcels-fill',
         type: 'fill',
         source: 'jicin_parcels',
-        //minzoom: 13,
         paint: {
           'fill-color': '#dde5e8',
           'fill-opacity': 1
@@ -166,21 +170,20 @@
         id: 'parcels-outline',
         type: 'line',
         source: 'jicin_parcels',
-        //minzoom: 13,
         paint: {
-        'line-color': '#000000',
-        'line-width': [
-          'interpolate', ['linear'], ['zoom'],
-          11, 0.1,
-          14, 0.5,
-          16, 2.0
-        ],
-        'line-opacity': [
-          'interpolate', ['linear'], ['zoom'],
-          11, 0.15,
-          14, 1.0
-        ]
-      }
+          'line-color': '#000000',
+          'line-width': [
+            'interpolate', ['linear'], ['zoom'],
+            11, 0.1,
+            14, 0.5,
+            16, 2.0
+          ],
+          'line-opacity': [
+            'interpolate', ['linear'], ['zoom'],
+            11, 0.15,
+            14, 1.0
+          ]
+        }
       });
 
       // Vrstva 3: Zvýraznění vybrané parcely

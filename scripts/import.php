@@ -25,6 +25,52 @@
         exit(1);
     }
 
+    // Matematika pro zjištění vzdálenosti bodu od úsečky
+    function perpendicularDistance($pt, $lineStart, $lineEnd) {
+        $dx = $lineEnd[0] - $lineStart[0];
+        $dy = $lineEnd[1] - $lineStart[1];
+        if ($dx === 0.0 && $dy === 0.0) {
+            return hypot($pt[0] - $lineStart[0], $pt[1] - $lineStart[1]);
+        }
+        return abs($dy * $pt[0] - $dx * $pt[1] + $lineEnd[0] * $lineStart[1] - $lineEnd[1] * $lineStart[0]) / hypot($dx, $dy);
+    }
+
+// Samotný Douglas-Peucker algoritmus
+    function douglasPeucker($points, $epsilon) {
+        $maxDistance = 0;
+        $index = 0;
+        $end = count($points) - 1;
+
+        for ($i = 1; $i < $end; $i++) {
+            $d = perpendicularDistance($points[$i], $points[0], $points[$end]);
+            if ($d > $maxDistance) {
+                $index = $i;
+                $maxDistance = $d;
+            }
+        }
+
+        if ($maxDistance > $epsilon) {
+            $left = douglasPeucker(array_slice($points, 0, $index + 1), $epsilon);
+            $right = douglasPeucker(array_slice($points, $index), $epsilon);
+            return array_merge(array_slice($left, 0, -1), $right);
+        } else {
+            return [$points[0], $points[$end]];
+        }
+    }
+
+// Funkce pro bezpečné ořezání uzavřeného polygonu
+    function simplifyRing($points, $epsilon) {
+        // Najdeme nejvzdálenější bod od startu a v něm kruh "rozřízneme" na dvě poloviny
+        $maxDist = 0; $splitIndex = 0; $startPt = $points[0];
+        for($i = 1; $i < count($points) - 1; $i++) {
+            $dist = pow($points[$i][0] - $startPt[0], 2) + pow($points[$i][1] - $startPt[1], 2);
+            if($dist > $maxDist) { $maxDist = $dist; $splitIndex = $i; }
+        }
+        $part1 = douglasPeucker(array_slice($points, 0, $splitIndex + 1), $epsilon);
+        $part2 = douglasPeucker(array_slice($points, $splitIndex), $epsilon);
+        return array_merge(array_slice($part1, 0, -1), $part2);
+    }
+
     // --- Nastavení SQLite databáze ---
     $dbPath = __DIR__ . '/../data/parcely.sqlite';
     $db = new PDO('sqlite:' . $dbPath);
@@ -33,7 +79,7 @@
     // Hlavní tabulka s atributy parcely a geometrií uloženou jako JSON text
     $db->exec('CREATE TABLE IF NOT EXISTS parcely (
     id INTEGER PRIMARY KEY, parcel_number TEXT, area INTEGER,
-    type TEXT, region TEXT, region_name TEXT, municipality TEXT, municipality_name TEXT, geometry TEXT
+    type TEXT, region TEXT, region_name TEXT, municipality TEXT, municipality_name TEXT, geometry TEXT, geometry_simple TEXT
     )');
 
     // R-Tree tabulka pro prostorové indexování (rychlé hledání parcel protínající daný BBOX)
@@ -42,7 +88,7 @@
     )');
 
     // Připravené SQL dotazy
-    $insert = $db->prepare('INSERT OR REPLACE INTO parcely VALUES (?,?,?,?,?,?,?,?,?)');
+    $insert = $db->prepare('INSERT OR REPLACE INTO parcely VALUES (?,?,?,?,?,?,?,?,?,?)');
     $insertRtree = $db->prepare('INSERT OR REPLACE INTO parcely_rtree VALUES (?,?,?,?,?)');
 
     // Datové slovníky pro uchování globálních informací o obci a katastru,
@@ -174,6 +220,11 @@
                     $lon = array_column($polygonCoords[0], 0);
                     $lat = array_column($polygonCoords[0], 1);
 
+                    $polygonCoordsSimple = [];
+                    foreach ($polygonCoords as $ring) {
+                        $polygonCoordsSimple[] = simplifyRing($ring, 0.00005);
+                    }
+
                     $insert->execute([
                         $paiId,
                         $formatovaneCislo,
@@ -183,7 +234,8 @@
                         $KatastralniUzemiNazev,
                         $ObecKod,
                         $ObecNazev,
-                        json_encode($polygonCoords)
+                        json_encode($polygonCoords),
+                        json_encode($polygonCoordsSimple)
                     ]);
 
                     $insertRtree->execute([

@@ -10,36 +10,60 @@
     header('Content-Type: application/json');
     header('Cache-Control: Public, max-age=60');
 
-    $db = new PDO('sqlite:' . __DIR__ . '/../../data/parcely.sqlite');
-    $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-
-    // Validace vstupu
-    if (!isset($_GET['bbox']) || count($bbox = explode(',', $_GET['bbox'])) !== 4) {
-        http_response_code(400);
-        echo json_encode(['error' => 'Neplatný nebo chybějící parametr bbox']);
+    function respondError(int $httpCode, string $message): never
+    {
+        http_response_code($httpCode);
+        echo json_encode(['error' => $message]);
         exit;
     }
 
-    // Dotaz přes JOIN na R-Tree tabulku
-    $stmt = $db->prepare('
-    SELECT p.id, p.parcel_number, p.area, p.type, p.region, p.region_name, p.municipality, p.municipality_name, p.geometry
-    FROM parcely_rtree r
-    JOIN parcely p ON p.id = r.id
-    WHERE r.minX <= ? AND r.maxX >= ? AND r.minY <= ? AND r.maxY >= ?
-    ');
+    // --- Validace vstupu ---
+    if (!isset($_GET['bbox'])) {
+        respondError(400, 'Chybějící parametr bbox');
+    }
 
-    $stmt->execute([$bbox[2], $bbox[0], $bbox[3], $bbox[1]]);
+    $bboxParts = explode(',', $_GET['bbox']);
+    if (count($bboxParts) !== 4 || !array_reduce($bboxParts, fn($ok, $v) => $ok && is_numeric($v), true)) {
+        respondError(400, 'Neplatný parametr bbox — očekávám "west,south,east,north" jako čísla');
+    }
+    [$west, $south, $east, $north] = array_map('floatval', $bboxParts);
 
-    $features = [];
+    $zoom = isset($_GET['zoom']) && is_numeric($_GET['zoom']) ? (int) $_GET['zoom'] : 14;
 
-    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+    // Explicitní allow-list místo přímého vkládání hodnoty
+    $geoColumn = ($zoom < 14) ? 'geometry_simple' : 'geometry';
 
-        // Geometrie je v DB uložená jako JSON text
-        $souradnice = json_decode($row['geometry']);
+    try {
+        $db = new PDO('sqlite:' . __DIR__ . '/../../data/parcely.sqlite');
+        $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
-        $feature = [
-            "type" => "Feature",
-            "properties" => [
+        $stmt = $db->prepare("
+            SELECT p.id, p.parcel_number, p.area, p.type, p.region, p.region_name,
+                   p.municipality, p.municipality_name, p.$geoColumn AS geometry
+            FROM parcely_rtree r
+            JOIN parcely p ON p.id = r.id
+            WHERE r.minX <= :east AND r.maxX >= :west
+              AND r.minY <= :north AND r.maxY >= :south
+        ");
+
+        $stmt->bindValue(':east', $east);
+        $stmt->bindValue(':west', $west);
+        $stmt->bindValue(':north', $north);
+        $stmt->bindValue(':south', $south);
+        $stmt->execute();
+
+        // --- OPTIMALIZACE: Streamování výstupu (šetří paměť serveru) ---
+        echo '{"type":"FeatureCollection","features":[';
+        $prvni = true;
+
+        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            if (!$prvni) {
+                echo ',';
+            }
+            $prvni = false;
+
+            // Enkódujeme pouze malý slovník properties
+            $properties = json_encode([
                 "id"                => (string) $row['id'],
                 "parcel_number"     => $row['parcel_number'],
                 "area"              => (int) $row['area'],
@@ -48,17 +72,20 @@
                 "region_name"       => $row['region_name'],
                 "municipality"      => $row['municipality'],
                 "municipality_name" => $row['municipality_name'],
-            ],
-            "geometry" => [
-                "type" => "Polygon",
-                "coordinates" => $souradnice
-            ]
-        ];
+            ]);
 
-        $features[] = $feature;
+            // Geometrie z DB už JE validní JSON string, nemusíme ji parsovat
+            $geometryStr = $row['geometry'];
+
+            // Slepíme rovnou textový řetězec a pošleme ho ven
+            echo '{"type":"Feature","properties":' . $properties . ',"geometry":{"type":"Polygon","coordinates":' . $geometryStr . '}}';
+        }
+
+        echo ']}';
+
+    } catch (PDOException $e) {
+        // Nikdy nenecháváme uniknout syrovou PDOException ven — klient by
+        // místo JSONu dostal HTML stránku s fatal errorem.
+        error_log('parcely.php DB error: ' . $e->getMessage());
+        respondError(500, 'Interní chyba při načítání parcel');
     }
-
-    echo json_encode([
-        "type" => "FeatureCollection",
-        "features" => $features
-    ]);
